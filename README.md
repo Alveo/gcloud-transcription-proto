@@ -1,6 +1,4 @@
 # Google Speech-to-Text API prototype
-Important: Only support audio up to one minunte in duration.
-
 ## Setup
 ```bash
 virtualenv env
