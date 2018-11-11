@@ -116,6 +116,13 @@ def gcloud_upload_file(local_filepath, gcloud_bucket_name):
 
     return url
 
+def gcloud_delete_file(file_name, gcloud_bucket_name):
+    """Deletes a blob from the bucket."""
+    bucket = storage_client.get_bucket(gcloud_bucket_name)
+    blob = bucket.blob(file_name)
+
+    blob.delete()
+
 def transcribe(config):
     """
     Automatically handles the interaction with Google Speech-to-text in order to
@@ -162,21 +169,19 @@ def transcribe(config):
         pass
 
     if long_mode:
-        print("Running in long audio duration mode...")
+        print("Running in long audio duration mode (audio is >60 seconds duration)...")
         print("Uploading file...")
         remote_object = gcloud_upload_file(config['file_location'], storage_bucket)
+        file_name = remote_object.rsplit('/', 1)[-1]
 
-        config['file_location'] = "gs://%s/%s" % (
-                    storage_bucket,
-                    remote_object.rsplit('/', 1)[-1]
-                )
-        print("Uploaded to %s" % config['file_location'])
+        config['file_location'] = "gs://%s/%s" % (storage_bucket, file_name)
 
         print("Transcribing file...")
         result = gcloud_transcribe_long(params)
 
-        #print("Transcription successful, cleaning up")
-        #delete bucket object
+        print("Transcription successful, cleaning up...")
+        print("Deleting uploaded GCS file...")
+        gcloud_delete_file(file_name, storage_bucket)
     else:
         print("Transcribing file...")
         config.pop('timeout')
