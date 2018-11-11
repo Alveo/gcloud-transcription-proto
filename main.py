@@ -12,13 +12,19 @@ from google.cloud.speech import types
 speech_client = speech.SpeechClient()
 storage_client = google.cloud.storage.Client()
 
+storage_bucket = os.environ.get("STORAGE_BUCKET_NAME")
+if storage_bucket is None:
+    raise KeyError('"STORAGE_BUCKET_NAME" environment variable not set. \
+            Cannot proceed.')
+    sys.exit()
+
 def gcloud_transcribe_short(config):
     """
     Uses Google Cloud Speech-to-Text to transcribe audio files up 
     to durations of 60 seconds.
 
     @config: Provided as a dict, requires at minimum:
-        - filepath - path to file
+        - file_location - /path/to/file
         - sample_rate_hertz - gcloud setting, typically 16000
         - language_code - gcloud setting, e.g 'en-AU' or 'ja-JP'
         - encoding - gcloud setting, e.g 
@@ -31,12 +37,12 @@ def gcloud_transcribe_short(config):
     @return: Response object from Google Cloud Speech
     """
     try:
-        file_path = config.pop('filepath')
+        file_location = config.pop('file_location')
     except KeyError:
-        raise Exception("`filepath` not specified for transcription operation.")
+        raise KeyError("`file_location` not specified for transcription operation.")
 
     # Read file into memory before uploading
-    with io.open(file_path, 'rb') as audio_file:
+    with io.open(file_location, 'rb') as audio_file:
         content = audio_file.read()
         audio = types.RecognitionAudio(content=content)
     
@@ -51,7 +57,7 @@ def gcloud_transcribe_long(config):
     for more information.
 
     @config: Provided as a dict, requires at minimum:
-        - remotepath - path to gs://bucket_name/file_path
+        - file_location - path to gs://bucket_name/file_location
         - sample_rate_hertz - gcloud setting, typically 16000
         - language_code - gcloud setting, e.g 'en-AU' or 'ja-JP'
         - encoding - gcloud setting, e.g 
@@ -65,21 +71,21 @@ def gcloud_transcribe_long(config):
     @return: Response object from Google Cloud Speech
     """
     try:
-        remote_path = config.pop('remotepath')
+        file_location = config.pop('file_location')
     except KeyError:
-        raise Exception("`remotepath` not specified for transcription operation.")
+        raise KeyError("`file_location` not specified for transcription operation.")
 
     try:
         timeout = config.pop('timeout')
     except KeyError:
-        raise Exception("`timeout` not specified for transcription operation.")
+        raise KeyError("`timeout` not specified for transcription operation.")
 
-    audio = types.RecognitionAudio(uri=remote_path)
+    audio = types.RecognitionAudio(uri=file_location)
     operation = speech_client.long_running_recognize(config, audio)
 
     response = operation.result(timeout=timeout)
 
-    return result
+    return response
 
 def gcloud_upload_file(local_filepath, gcloud_bucket_name):
     """
@@ -108,16 +114,82 @@ def gcloud_upload_file(local_filepath, gcloud_bucket_name):
     if isinstance(url, six.binary_type):
         url = url.decode('utf-8')
 
-    print("File successfully uploaded to %s" % url)
     return url
 
+def transcribe(config):
+    """
+    Automatically handles the interaction with Google Speech-to-text in order to
+     automagically transcribe some audio data.
+
+    GCloud requires a different mechanism if the audio file is longer than 60 seconds,
+     we can save a few steps and have the operation complete quicker if it is less than
+     that specified duration though.
+
+    If the file is longer than 60 seconds, it has be uploaded to GCloud Storage, so
+     this function will take care of that for us.
+
+    @config: Provided as a dict, requires at minimum:
+        - file_location - path to gs://bucket_name/file_location
+        - timeout - how long to wait before timing out
+        - sample_rate_hertz - gcloud setting, typically 16000
+        - language_code - gcloud setting, e.g 'en-AU' or 'ja-JP'
+        - encoding - gcloud setting, e.g 
+                        enums.RecognitionConfig.AudioEncoding.LINEAR16
+
+        Other examples of config options that might be of use:
+        - audio_duration - duration of the audio file to be transcribed in seconds
+                            Not required but should be specified for files less than
+                            60 seconds in duration as there is a slightly quicker way
+                            to have them transcribed.
+        - enable_speaker_diarization=False, diarization_speaker_count=2):
+        - enable_word_time_offsets=False
+
+    @return: The transcribed data
+    """
+
+    long_mode = True
+
+    if 'file_location' not in config:
+        raise KeyError("`file_location` not specified for transcription operation.")
+
+    if 'timeout' not in config:
+        raise KeyError("`timeout` not specified for transcription operation.")
+
+    try:
+        if config.pop('audio_duration') < 60: 
+            long_mode = False
+    except KeyError:
+        pass
+
+    if long_mode:
+        print("Running in long audio duration mode...")
+        print("Uploading file...")
+        remote_object = gcloud_upload_file(config['file_location'], storage_bucket)
+
+        config['file_location'] = "gs://%s/%s" % (
+                    storage_bucket,
+                    remote_object.rsplit('/', 1)[-1]
+                )
+        print("Uploaded to %s" % config['file_location'])
+
+        print("Transcribing file...")
+        result = gcloud_transcribe_long(params)
+
+        #print("Transcription successful, cleaning up")
+        #delete bucket object
+    else:
+        print("Transcribing file...")
+        config.pop('timeout')
+        result = gcloud_transcribe_short(params)
+
+    return result
+
 params = {
-    #'filepath': sys.argv[1],
-    'remotepath': 'gs://alveo-transcriber/audio.wav__f3d4e33a-8aac-4562-9247-11495ebcce25',
+    'file_location': sys.argv[1],
+    'timeout': 90,
+    'audio_duration': 61,
     'sample_rate_hertz': 16000,
     'language_code': 'en-AU',
     'encoding': enums.RecognitionConfig.AudioEncoding.LINEAR16
 }
-#gcloud_upload_file(sys.argv[1], 'alveo-transcriber')
-#print(gcloud_transcribe_short(params))
-print(gcloud_transcribe_long(params))
+print(transcribe(params))
